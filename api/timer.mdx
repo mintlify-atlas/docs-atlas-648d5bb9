@@ -1,0 +1,150 @@
+---
+title: "Timer Module — Control the LiveSplit One Timer"
+sidebarTitle: "Timer"
+description: "Full API reference for asr-assemblyscript/timer. Start, split, reset, and manage game time. Read timer state to avoid invalid transitions."
+---
+
+The `timer` module is your primary interface for controlling the LiveSplit One timer from within your auto splitter. It exposes functions to start, split, reset, and manage both real time and game time, as well as a state query so you can guard against invalid transitions. Every function in this module communicates directly with the LiveSplit One host via WebAssembly imports — no internal state is maintained on the Wasm side.
+
+```typescript
+import * as Timer from 'asr-assemblyscript/timer';
+```
+
+---
+
+## TimerState
+
+`TimerState` is a `u32` type alias that represents the current state of the timer. Use it to guard timer calls and avoid triggering illegal transitions (e.g. splitting when the timer has already ended).
+
+```typescript
+type TimerState = u32;
+```
+
+| Value | Constant meaning        | Description                                      |
+|-------|-------------------------|--------------------------------------------------|
+| `0`   | **Not Running**         | The timer has not been started yet.              |
+| `1`   | **Running**             | The timer is actively counting up.               |
+| `2`   | **Paused**              | Game time is paused; real time continues.        |
+| `3`   | **Ended**               | The run has been finished (final split done).    |
+
+---
+
+## getState
+
+```typescript
+function getState(): TimerState
+```
+
+Gets the state that the timer is currently in. Always check the returned state before calling `start()`, `split()`, or `reset()` to avoid no-op or invalid operations.
+
+**Returns:** `TimerState` — one of the four numeric states described above.
+
+<CodeGroup>
+```typescript Check state before starting
+import * as Timer from 'asr-assemblyscript/timer';
+
+if (Timer.getState() === 0) { // Not Running
+  Timer.start();
+}
+```
+</CodeGroup>
+
+---
+
+## start
+
+```typescript
+function start(): void
+```
+
+Starts the timer. This function has no effect if the timer is already running or has ended. Check `getState()` before calling if you need to guard the transition.
+
+---
+
+## split
+
+```typescript
+function split(): void
+```
+
+Splits the current segment, advancing the run to the next one. If this is the final segment, the run is ended and the timer state transitions to `3` (Ended). Has no effect if the timer is not currently running.
+
+---
+
+## reset
+
+```typescript
+function reset(): void
+```
+
+Resets the timer back to its initial state. This clears all split times and returns the timer state to `0` (Not Running). Any unsaved run data will be lost.
+
+---
+
+## setGameTime
+
+```typescript
+function setGameTime(secs: i64, nanos: i32): void
+```
+
+Sets the current game time to the specified duration. Game time is independent of the wall-clock time tracked by the timer — it must be explicitly set by your auto splitter each tick if you want a custom game time value. Call `pauseGameTime()` before `setGameTime()` to prevent the runtime from automatically advancing game time between your updates.
+
+<ParamField path="secs" type="i64" required>
+  The whole-second component of the game time duration. May be negative to represent time before the start.
+</ParamField>
+
+<ParamField path="nanos" type="i32" required>
+  The sub-second nanosecond component. Must be in the range `0–999_999_999`.
+</ParamField>
+
+<CodeGroup>
+```typescript Set game time to 1m 30.5s
+// Set game time to 1 minute, 30 seconds, 500 milliseconds
+Timer.setGameTime(90, 500_000_000);
+```
+</CodeGroup>
+
+---
+
+## pauseGameTime
+
+```typescript
+function pauseGameTime(): void
+```
+
+Pauses the automatic flow of game time. This does **not** pause the timer itself — real time continues counting. Use this when your auto splitter is responsible for providing game time values via `setGameTime()`, so the runtime does not advance game time between your explicit updates.
+
+---
+
+## resumeGameTime
+
+```typescript
+function resumeGameTime(): void
+```
+
+Resumes the automatic flow of game time after it has been paused with `pauseGameTime()`. This does **not** resume a paused timer — it only re-enables the runtime's automatic game time advancement.
+
+---
+
+## setVariable
+
+```typescript
+function setVariable(key: string, value: string): void
+```
+
+Sets a custom key-value pair that the auto splitter wants to expose for visualization. This may be used to communicate arbitrary run metadata — such as the current level name, in-game score, or percent completion — to LiveSplit One components that can display it.
+
+<ParamField path="key" type="string" required>
+  A unique string identifier for this variable. Repeated calls with the same key will overwrite the previous value.
+</ParamField>
+
+<ParamField path="value" type="string" required>
+  The string value to associate with the key. Both `key` and `value` are encoded as UTF-8 before being passed to the host.
+</ParamField>
+
+<CodeGroup>
+```typescript Expose current level for display
+Timer.setVariable("level", "World 1-1");
+Timer.setVariable("completion", "42%");
+```
+</CodeGroup>

@@ -1,0 +1,92 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "asr-assemblyscript",
+  "projectDescription": "An AssemblyScript library for writing WebAssembly auto splitters that run inside LiveSplit One's auto splitting runtime.",
+  "theme": "luma",
+  "primaryColor": "#E84855",
+  "lightColor": "#FF6B77",
+  "darkColor": "#C4323E",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/auto-splitter-lifecycle",
+              "guides/reading-memory",
+              "guides/memory-watchers",
+              "guides/user-settings"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Modules",
+            "pages": [
+              "api/timer",
+              "api/process",
+              "api/runtime",
+              "api/user-settings",
+              "api/watcher"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Timer control (start, split, reset, game time management)",
+    "Process attachment and memory reading for game data extraction",
+    "Typed memory watchers for detecting value changes across update cycles",
+    "User-configurable boolean settings exposed to LiveSplit One's UI",
+    "Runtime introspection (OS, architecture, tick rate control)",
+    "WebAssembly output via AssemblyScript compilation"
+  ],
+  "publicApiSurface": [
+    "Timer.getState(): TimerState",
+    "Timer.start(): void",
+    "Timer.split(): void",
+    "Timer.reset(): void",
+    "Timer.setGameTime(secs: i64, nanos: i32): void",
+    "Timer.pauseGameTime(): void",
+    "Timer.resumeGameTime(): void",
+    "Timer.setVariable(key: string, value: string): void",
+    "Process.attach(name: string): ProcessId",
+    "Process.detach(process: ProcessId): void",
+    "Process.isOpen(process: ProcessId): bool",
+    "Process.read(process: ProcessId, address: Address, buf: ArrayBuffer): bool",
+    "Process.getModuleAddress(process: ProcessId, name: string): Address",
+    "Process.getModuleSize(process: ProcessId, name: string): u64",
+    "Runtime.setTickRate(ticks_per_second: f64): void",
+    "Runtime.printMessage(text: string): void",
+    "Runtime.getOS(): string",
+    "Runtime.getArch(): string",
+    "UserSettings.addBool(key: string, description: string, defaultValue: bool): bool",
+    "BoolWatcher",
+    "I8Watcher",
+    "I16Watcher",
+    "I32Watcher",
+    "I64Watcher",
+    "ISizeWatcher",
+    "U8Watcher",
+    "U16Watcher",
+    "U32Watcher",
+    "U64Watcher",
+    "USizeWatcher",
+    "F32Watcher",
+    "F64Watcher",
+    "StringWatcher"
+  ]
+}

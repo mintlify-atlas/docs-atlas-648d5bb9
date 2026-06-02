@@ -1,0 +1,139 @@
+---
+title: "Runtime Module — Tick Rate, Logging, and OS Detection"
+sidebarTitle: "Runtime"
+description: "Full API reference for asr-assemblyscript/runtime. Configure tick rate, print debug messages, and query the host OS and CPU architecture at runtime."
+---
+
+The `runtime` module configures the auto splitting runtime environment and provides essential debugging and introspection utilities. It controls how frequently your `update()` function is invoked, exposes a logging helper for development, and lets your code inspect the host operating system and CPU architecture so you can branch on platform-specific behaviour (for example, choosing between a 32-bit and 64-bit game executable).
+
+Beyond its exported functions, this module also registers a custom `abort` handler that replaces AssemblyScript's default error behaviour with an explicit WebAssembly `unreachable` trap. **This side-effect import is required in your entry file.** Without it, runtime errors may not be surfaced correctly by the LiveSplit One host.
+
+```typescript
+import 'asr-assemblyscript/runtime';              // required side-effect import
+import * as Runtime from 'asr-assemblyscript/runtime'; // for using the exported functions
+```
+
+Both imports can coexist in the same file — the side-effect import simply ensures the `abort` handler is registered, while the namespace import gives you access to the functions below.
+
+---
+
+## setTickRate
+
+```typescript
+function setTickRate(ticks_per_second: f64): void
+```
+
+Sets how many times per second the LiveSplit One host will call your auto splitter's `update()` function. This applies globally to the runtime — it is not scoped to a single auto splitter module.
+
+<ParamField path="ticks_per_second" type="f64" required>
+  The desired number of `update()` calls per second. Must be a positive value. Common choices are `60.0` (default) for responsive splitting, or lower values such as `30.0` or `10.0` to reduce CPU usage for simpler auto splitters.
+</ParamField>
+
+<Note>
+  `setTickRate` affects the entire auto splitting runtime — a common default is **60 ticks per second**. Lowering the rate reduces CPU usage and is recommended for auto splitters that only need to poll memory infrequently. Changes take effect on the next tick cycle.
+</Note>
+
+<CodeGroup>
+```typescript Set a lower tick rate on startup
+import 'asr-assemblyscript/runtime';
+import * as Runtime from 'asr-assemblyscript/runtime';
+
+let initialized = false;
+
+export function update(): void {
+  if (!initialized) {
+    Runtime.setTickRate(30.0); // poll 30 times per second
+    initialized = true;
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## printMessage
+
+```typescript
+function printMessage(text: string): void
+```
+
+Prints a debug log message to the LiveSplit One debug console. The message is encoded as UTF-8 before being passed to the host. Use this during development to inspect values and trace execution — it has no effect on timer behaviour.
+
+<ParamField path="text" type="string" required>
+  The message string to print. Accepts any valid UTF-8 content, including interpolated values.
+</ParamField>
+
+<CodeGroup>
+```typescript Log a debug value
+import * as Runtime from 'asr-assemblyscript/runtime';
+
+Runtime.printMessage("Auto splitter loaded!");
+Runtime.printMessage("Current level: " + levelName);
+```
+</CodeGroup>
+
+---
+
+## getOS
+
+```typescript
+function getOS(): string
+```
+
+Returns the name of the operating system that the LiveSplit One runtime is running on. The string is valid UTF-8 and not null-terminated. Returns an empty string `""` if the OS name cannot be determined.
+
+**Returns:** `string` — the OS identifier. Example values:
+
+| Value       | Platform         |
+|-------------|------------------|
+| `"windows"` | Microsoft Windows |
+| `"linux"`   | Linux             |
+| `"macos"`   | macOS / OS X      |
+
+---
+
+## getArch
+
+```typescript
+function getArch(): string
+```
+
+Returns the name of the CPU architecture that the LiveSplit One runtime is running on. The string is valid UTF-8 and not null-terminated. Returns an empty string `""` if the architecture cannot be determined.
+
+**Returns:** `string` — the architecture identifier. Example values:
+
+| Value        | Architecture              |
+|--------------|---------------------------|
+| `"x86"`      | 32-bit x86                |
+| `"x86_64"`   | 64-bit x86 (amd64)        |
+| `"arm"`      | 32-bit ARM                |
+| `"aarch64"`  | 64-bit ARM (Apple Silicon) |
+
+---
+
+## Combined Example
+
+```typescript
+import 'asr-assemblyscript/runtime';
+import * as Runtime from 'asr-assemblyscript/runtime';
+
+let initialized = false;
+
+export function update(): void {
+  if (!initialized) {
+    const os   = Runtime.getOS();
+    const arch = Runtime.getArch();
+
+    Runtime.printMessage("Running on " + os + " / " + arch);
+
+    // Choose the right process name based on the host OS
+    if (os === "windows") {
+      // attach to Celeste.exe
+    } else if (os === "linux") {
+      // attach to Celeste (no extension)
+    }
+
+    initialized = true;
+  }
+}
+```

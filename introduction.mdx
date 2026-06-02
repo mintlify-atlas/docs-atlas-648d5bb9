@@ -1,0 +1,57 @@
+---
+title: "asr-assemblyscript: Write Auto Splitters with AssemblyScript"
+sidebarTitle: "Introduction"
+description: "asr-assemblyscript is an AssemblyScript library for building LiveSplit One auto splitters that compile to WebAssembly and control speedrun timers from game memory."
+---
+
+**asr-assemblyscript** is an [AssemblyScript](https://www.assemblyscript.org/) library that gives speedrun developers a structured, type-safe way to write auto splitters for [LiveSplit One](https://github.com/LiveSplit/LiveSplitOne). Instead of manually authoring raw WebAssembly or wrestling with low-level host imports, you write familiar TypeScript-like code, compile it to a `.wasm` binary, and drop that file into LiveSplit One's layout — where the auto splitting runtime takes over. The library is designed for anyone who wants to automate timer control for a game: from a runner writing their first splitter to a developer maintaining splits for an entire game community.
+
+## What is an auto splitter?
+
+An auto splitter is a small WebAssembly module loaded directly by the LiveSplit One auto splitting runtime. Once loaded, the runtime calls the module's exported `update()` function on every tick (the rate is configurable via `Runtime.setTickRate`). Inside `update()`, your code inspects the game's process memory and issues timer commands — start, split, reset — based on what it finds. Because the module runs inside a sandboxed WebAssembly environment, it can only interact with the outside world through the host functions that the runtime exposes, all of which are wrapped by this library.
+
+## Library modules
+
+asr-assemblyscript is organized into four focused modules and one collection of helper classes:
+
+| Module | Import path | Purpose |
+|---|---|---|
+| **timer** | `asr-assemblyscript/timer` | Control the speedrun timer: start, split, reset, set game time, pause/resume game time, and read the current `TimerState`. |
+| **process** | `asr-assemblyscript/process` | Attach to a running game process by name, check whether it is still open, read arbitrary memory addresses, and look up module base addresses and sizes. |
+| **runtime** | `asr-assemblyscript/runtime` | Configure the tick rate, print debug log messages, and query the host operating system and CPU architecture. Also provides the custom `abort` implementation required by AssemblyScript. |
+| **userSettings** | `asr-assemblyscript/userSettings` | Expose boolean toggles to the runner through LiveSplit One's settings UI, returning either the user-chosen value or a specified default. |
+| **watcher classes** | `asr-assemblyscript/watcher` | Typed helpers (`BoolWatcher`, `I32Watcher`, `U64Watcher`, `F64Watcher`, `StringWatcher`, and more) that track a memory value across ticks, exposing both the `current` value and the `old` value from the previous update so you can react to changes with `.changed`. |
+
+## Timer states
+
+The `getState()` function in the `timer` module returns a `TimerState` value (typed as `u32`). There are four possible states a speedrun timer can be in:
+
+| Value | State | Meaning |
+|---|---|---|
+| `0` | **Not Running** | The timer has not been started yet (or has been fully reset). |
+| `1` | **Running** | The timer is actively counting up. |
+| `2` | **Paused** | The timer is paused mid-run. |
+| `3` | **Ended** | The runner has crossed the finish line and the run is complete. |
+
+You can compare the return value of `Timer.getState()` directly against these numeric constants to branch your logic — for example, only issuing a `Timer.split()` call when the state is `1` (Running).
+
+## Explore the docs
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Set up a project, write your first auto splitter, and compile it to `.wasm` in under 10 minutes.
+  </Card>
+  <Card title="Auto Splitter Lifecycle" icon="arrows-rotate" href="/guides/auto-splitter-lifecycle">
+    Understand how the runtime loads your module, calls `update()`, and manages process attachment.
+  </Card>
+  <Card title="Reading Memory" icon="magnifying-glass" href="/guides/reading-memory">
+    Use the `process` module and watcher helpers to read typed values from a game's memory.
+  </Card>
+  <Card title="Timer API" icon="stopwatch" href="/api/timer">
+    Full reference for every function exported by the `timer` module.
+  </Card>
+</CardGroup>
+
+<Note>
+  asr-assemblyscript targets **AssemblyScript** — a TypeScript-like language that compiles directly to WebAssembly. It does **not** run in Node.js or a browser JavaScript engine. Code you write with this library is compiled to a standalone `.wasm` binary that is loaded and sandboxed by the LiveSplit One runtime.
+</Note>

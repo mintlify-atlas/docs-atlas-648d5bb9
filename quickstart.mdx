@@ -1,47 +1,137 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with asr-assemblyscript in 5 Steps"
+sidebarTitle: "Quickstart"
+description: "Create, compile, and load your first auto splitter with asr-assemblyscript. Goes from zero to a working .wasm file in under 10 minutes."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+This guide walks you through creating a brand-new auto splitter project from scratch using asr-assemblyscript. By the end you will have a fully compiled `.wasm` file that attaches to a game process and controls LiveSplit One's timer automatically. All you need is [Node.js](https://nodejs.org) (v16 or later) installed on your machine — the AssemblyScript compiler and the library itself are installed locally through npm.
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
 
-    ```bash
-    npm install your-package
-    ```
-  </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+<Step title="Create the project folder">
 
-    ```bash
-    your-cli init
-    ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+Create a directory for your auto splitter and navigate into it, then initialize a new npm project. Running `npm init` will prompt you for basic metadata; you can press Enter to accept the defaults for every field.
 
-    ```bash
-    your-cli start
-    ```
-  </Step>
-</Steps>
+```bash
+mkdir my-auto-splitter
+cd my-auto-splitter
+npm init
+```
+
+</Step>
+
+<Step title="Install AssemblyScript and asr-assemblyscript">
+
+Install the AssemblyScript compiler as a dev dependency, then add asr-assemblyscript itself. Because asr-assemblyscript is distributed directly from GitHub rather than the npm registry, the second command uses the full repository URL.
+
+```bash
+npm install --save-dev assemblyscript
+npm i --save https://github.com/CryZe/asr-assemblyscript
+```
+
+After this step your `node_modules` folder will contain both the `assemblyscript` compiler toolchain and the `asr-assemblyscript` library source files.
+
+</Step>
+
+<Step title="Initialize the AssemblyScript project">
+
+Use the AssemblyScript scaffolding tool (`asinit`) to generate the standard project layout. This creates the `assembly/` source directory, a starter `assembly/index.ts` entry point, an `asconfig.json` compiler configuration file, and updates `package.json` with build scripts.
+
+```bash
+npx asinit .
+```
+
+</Step>
+
+<Step title="Update the build scripts in package.json">
+
+The scaffolded build scripts do not yet reference asr-assemblyscript's custom `abort` implementation, which the AssemblyScript runtime requires. Open `package.json` and replace the two `asbuild` script lines with the versions below so the compiler picks up the correct abort handler via the `--use` flag.
+
+```json
+"asbuild:debug": "asc assembly/index.ts --target debug --use abort=~lib/asr-assemblyscript/runtime/abort",
+"asbuild:release": "asc assembly/index.ts --target release --use abort=~lib/asr-assemblyscript/runtime/abort",
+```
+
+Your `scripts` section should look similar to this after the edit:
+
+```json
+"scripts": {
+  "test": "echo \"Error: no test specified\" && exit 1",
+  "asbuild:debug": "asc assembly/index.ts --target debug --use abort=~lib/asr-assemblyscript/runtime/abort",
+  "asbuild:release": "asc assembly/index.ts --target release --use abort=~lib/asr-assemblyscript/runtime/abort"
+},
+```
+
+<Note>
+  The `--use abort=~lib/asr-assemblyscript/runtime/abort` flag tells the AssemblyScript compiler to substitute asr-assemblyscript's abort function in place of the default one. Without it, unhandled errors inside the module will not be handled gracefully inside the sandboxed runtime.
+</Note>
+
+</Step>
+
+<Step title="Write your auto splitter and compile">
+
+Open `assembly/index.ts` and replace its contents with the example below. This minimal auto splitter imports the `runtime` side-effects module (which registers the custom abort handler), imports the `timer` and `process` modules, then exports the `update()` function that the runtime calls on every tick.
+
+<CodeGroup>
+
+```typescript assembly/index.ts
+import "asr-assemblyscript/runtime";
+import * as Timer from "asr-assemblyscript/timer";
+import * as Process from "asr-assemblyscript/process";
+
+// Store the process ID between ticks. 0 means not yet attached.
+let processId: u64 = 0;
+
+export function update(): void {
+  // If we are not attached, try to attach to the game process.
+  if (processId === 0) {
+    processId = Process.attach("MyGame.exe");
+    return;
+  }
+
+  // If the process has closed, detach and reset our stored ID.
+  if (!Process.isOpen(processId)) {
+    Process.detach(processId);
+    processId = 0;
+    return;
+  }
+
+  // We are attached and the process is open — start the timer.
+  Timer.start();
+}
+```
+
+</CodeGroup>
+
+Once your code is ready, compile it into a release WebAssembly binary:
+
+```bash
+npm run asbuild:release
+```
+
+The compiler will emit your finished auto splitter to:
+
+```
+build/release.wasm
+```
 
 <Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
-
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+  To load your auto splitter in LiveSplit One, open **Layout Settings**, add an **Auto Splitting Runtime** component, and point it at your `build/release.wasm` file. LiveSplit One will begin calling `update()` automatically once the layout is active.
 </Tip>
+
+</Step>
+
+</Steps>
+
+## Next steps
+
+You now have a working auto splitter skeleton. From here you can expand the `update()` function to read specific memory addresses using `Process.read()` or the typed watcher classes, fire `Timer.split()` when a level changes, call `Timer.reset()` on a new-game flag, or expose toggle options to runners with `UserSettings.addBool()`. Check out the guides below to go deeper.
+
+<CardGroup cols={2}>
+  <Card title="Auto Splitter Lifecycle" icon="arrows-rotate" href="/guides/auto-splitter-lifecycle">
+    Learn exactly when and how the runtime calls your `update()` function and how to manage process state across ticks.
+  </Card>
+  <Card title="Reading Memory" icon="magnifying-glass" href="/guides/reading-memory">
+    Use `Process.read()`, module addresses, and the watcher helper classes to track game values.
+  </Card>
+</CardGroup>

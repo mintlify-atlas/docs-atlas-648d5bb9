@@ -1,0 +1,166 @@
+---
+title: "Auto Splitter Lifecycle in LiveSplit One's Runtime"
+sidebarTitle: "Lifecycle"
+description: "Understand how the runtime loads your WebAssembly module, calls update() on each tick, and how to structure your auto splitter's main loop."
+---
+
+LiveSplit One's auto splitting runtime loads a compiled `.wasm` module and drives it by calling a single exported function — `update()` — at a configurable rate. Every piece of logic your auto splitter performs happens inside that function or in code called from it. Understanding this loop-based model is the first step to writing a reliable auto splitter: you are not writing a traditional program with a `main` that runs to completion, but rather a callback that fires dozens of times per second and must quickly read memory, check conditions, and return.
+
+## How the Runtime Loads Your Module
+
+<Steps>
+  <Step title="Compile and load the WASM module">
+    The runner points LiveSplit One at your compiled `.wasm` file. The runtime
+    instantiates the WebAssembly module and wires up all host imports — the
+    functions you call to read memory, control the timer, and interact with the
+    runtime itself.
+  </Step>
+  <Step title="Call update() on each tick">
+    Once the module is instantiated, the runtime begins calling your exported
+    `update()` function repeatedly at the configured tick rate. Each call is one
+    "tick" of your auto splitter.
+  </Step>
+  <Step title="Receive host function calls back">
+    Inside `update()`, your code calls back into the host via the imported
+    functions from `asr-assemblyscript` — for example, reading process memory or
+    splitting the timer. The host executes those calls synchronously and returns
+    control to your function before the next tick.
+  </Step>
+</Steps>
+
+## Required Export: `update()`
+
+The runtime expects exactly one exported function from your module:
+
+```typescript
+export function update(): void {
+  // your logic here
+}
+```
+
+This function is your entire entry point. There is no `start`, `init`, or constructor called by the runtime — any one-time setup must be handled through module-level initializers or a flag you check on the first tick.
+
+## Required Import: `asr-assemblyscript/runtime`
+
+<Note>
+  Importing `asr-assemblyscript/runtime` at the top of your entry file is
+  required. It installs a custom `abort` handler that routes AssemblyScript
+  runtime errors to a `unreachable` WebAssembly trap instead of trying to call
+  browser APIs that don't exist in the auto splitting runtime. Without it, your
+  module will fail to compile or behave incorrectly at runtime.
+</Note>
+
+You must also pass the custom abort implementation to the AssemblyScript compiler via the `--use` flag. In your `package.json` build scripts this looks like:
+
+```json
+{
+  "scripts": {
+    "asbuild:debug": "asc assembly/index.ts --target debug --use abort=~lib/asr-assemblyscript/runtime/abort",
+    "asbuild:release": "asc assembly/index.ts --target release --use abort=~lib/asr-assemblyscript/runtime/abort"
+  }
+}
+```
+
+## Minimal Auto Splitter Structure
+
+The smallest possible auto splitter imports the runtime module, imports any other modules you need, and exports `update()`:
+
+```typescript
+import 'asr-assemblyscript/runtime';
+import * as Timer from 'asr-assemblyscript/timer';
+
+export function update(): void {
+  // your logic here
+}
+```
+
+## Configuring the Tick Rate
+
+By default the runtime chooses a tick rate for you. If your auto splitter needs a specific polling frequency — for example, a game that updates at exactly 60 Hz — you can call `setTickRate` from `asr-assemblyscript/runtime`:
+
+```typescript
+import 'asr-assemblyscript/runtime';
+import * as Runtime from 'asr-assemblyscript/runtime';
+import * as Timer from 'asr-assemblyscript/timer';
+
+export function update(): void {
+  Runtime.setTickRate(60.0); // request 60 ticks per second
+  // ...
+}
+```
+
+`setTickRate(ticks_per_second: f64): void` accepts a `f64` specifying how many times per second `update()` should be called. You typically call this once at the top of `update()` (calling it repeatedly is safe — the value is applied immediately).
+
+## Managing Process State Across Ticks
+
+Because `update()` is called repeatedly, any state that must persist between ticks — such as the `ProcessId` returned when you attach to a game — must be stored in module-level variables. The pattern below is the recommended skeleton for any auto splitter that reads game memory:
+
+```typescript
+import 'asr-assemblyscript/runtime';
+import * as Process from 'asr-assemblyscript/process';
+import * as Timer from 'asr-assemblyscript/timer';
+
+let processId: Process.ProcessId = 0;
+
+export function update(): void {
+  if (processId === 0 || !Process.isOpen(processId)) {
+    processId = Process.attach('MyGame.exe');
+    return;
+  }
+  // read memory and control timer
+}
+```
+
+- **`processId === 0`** — `Process.attach` returns `0` when the game is not running. Storing `0` as the sentinel value means you can always check whether you currently hold a valid handle.
+- **`!Process.isOpen(processId)`** — even after a successful attach, the game can close at any time. Calling `isOpen` every tick detects this and lets you re-attach on the next tick where the game is found again.
+- **`return` after a failed attach** — if the game isn't running yet, bail out early and try again next tick rather than executing the rest of your logic with a bad handle.
+
+## Timer State
+
+Before calling `Timer.start()` or `Timer.split()`, check that the timer is in the expected state using `Timer.getState()`. The return type is `TimerState` (a `u32` alias) with the following values:
+
+| Value | Constant meaning | Description                  |
+|-------|------------------|------------------------------|
+| `0`   | Not Running      | Timer has not been started   |
+| `1`   | Running          | Timer is actively counting   |
+| `2`   | Paused           | Timer is paused              |
+| `3`   | Ended            | Run has been completed       |
+
+A typical guard looks like this:
+
+```typescript
+import 'asr-assemblyscript/runtime';
+import * as Timer from 'asr-assemblyscript/timer';
+
+export function update(): void {
+  const state = Timer.getState();
+
+  if (state === 0) {
+    // Timer not running — check start condition
+    if (/* start condition */) {
+      Timer.start();
+    }
+  } else if (state === 1) {
+    // Timer running — check split or reset conditions
+    if (/* split condition */) {
+      Timer.split();
+    }
+    if (/* reset condition */) {
+      Timer.reset();
+    }
+  }
+}
+```
+
+## Additional Timer Functions
+
+Beyond `start()`, `split()`, and `reset()`, the Timer module exposes game-time controls for auto splitters that manage their own timing:
+
+| Function | Signature | Description |
+|---|---|---|
+| `setGameTime` | `(secs: i64, nanos: i32): void` | Set the current game time |
+| `pauseGameTime` | `(): void` | Pause the automatic flow of game time |
+| `resumeGameTime` | `(): void` | Resume the automatic flow of game time |
+| `setVariable` | `(key: string, value: string): void` | Publish a custom key/value pair for visualization |
+
+These are useful for games that expose an in-game timer value in memory, allowing you to drive LiveSplit One's game-time comparison directly from the game's own clock.

@@ -1,0 +1,197 @@
+---
+title: "Reading Game Memory with the Process Module"
+sidebarTitle: "Reading Memory"
+description: "Attach to a running game process by name, resolve module base addresses, and read typed values from memory using asr-assemblyscript's Process API."
+---
+
+Auto splitters work by reading live game memory to determine when in-game events have occurred — things like level IDs incrementing, a health value reaching zero, a completion flag flipping to `true`, or a position crossing a threshold. The `asr-assemblyscript/process` module is the bridge between your WebAssembly code and the game's address space, providing functions to attach to a running process, look up module base addresses, and copy raw bytes out of memory into AssemblyScript `ArrayBuffer`s you can then interpret as typed values.
+
+## Core Types
+
+The Process module defines two type aliases that appear throughout the API:
+
+```typescript
+export type ProcessId = u64;
+export type Address  = u64;
+```
+
+- **`ProcessId`** — an opaque handle to an attached process, returned by `Process.attach`. A value of `0` indicates no valid handle.
+- **`Address`** — a 64-bit memory address within the target process's address space.
+
+## Attaching to a Process
+
+```typescript
+Process.attach(name: string): ProcessId
+```
+
+Searches running processes for one whose name matches `name` (for example `'MyGame.exe'` on Windows). Returns a non-zero `ProcessId` on success, or `0` if no matching process was found.
+
+Always check the returned value before using it:
+
+```typescript
+import * as Process from 'asr-assemblyscript/process';
+
+let processId: Process.ProcessId = 0;
+
+export function update(): void {
+  if (processId === 0 || !Process.isOpen(processId)) {
+    processId = Process.attach('MyGame.exe');
+    if (processId === 0) {
+      return; // game not running yet, try again next tick
+    }
+  }
+  // safe to use processId here
+}
+```
+
+## Checking Whether a Process Is Still Open
+
+```typescript
+Process.isOpen(process: ProcessId): bool
+```
+
+Returns `true` if the process identified by `process` is still running. You should call this every tick — games can close at any time, and using a stale `ProcessId` will cause memory reads to fail silently. When `isOpen` returns `false`, discard the handle and re-attach on the next tick.
+
+## Detaching from a Process
+
+```typescript
+Process.detach(process: ProcessId): void
+```
+
+Releases the handle to the process. Call this when you are intentionally done with a process — for example, if your auto splitter supports switching between multiple games.
+
+## Resolving Module Base Addresses
+
+Most games load their main executable and one or more `.dll` files. Memory offsets found with a tool like Cheat Engine are typically relative to the base address of one of these modules, not absolute addresses. Use these two functions to resolve module bases:
+
+```typescript
+Process.getModuleAddress(process: ProcessId, name: string): Address
+Process.getModuleSize(process: ProcessId, name: string): u64
+```
+
+- **`getModuleAddress`** returns the base `Address` at which the named module is loaded in the process's address space. Add your known offset to this value to get the final address to read.
+- **`getModuleSize`** returns the size of the module in bytes. This is useful for sanity-checking that a module has loaded to the expected size.
+
+<Warning>
+  `getModuleAddress` returns `0` if the named module has not yet been loaded
+  into the process — this can happen during startup or level transitions. Always
+  guard your reads against a `0` base address, or your offset arithmetic will
+  silently read from the wrong location.
+</Warning>
+
+## Reading Raw Memory
+
+```typescript
+Process.read(process: ProcessId, address: Address, buf: ArrayBuffer): bool
+```
+
+Reads `buf.byteLength` bytes from `address` in the target process into `buf`. Returns `true` on success and `false` if the read fails (for example, the address is unmapped or the process has closed). Always check the return value before interpreting the buffer contents.
+
+## Reading a Typed Value
+
+To read a specific type, allocate an `ArrayBuffer` of the appropriate byte size, call `Process.read`, then use a `DataView` to extract the value:
+
+<CodeGroup>
+
+```typescript Reading an i32
+const baseAddress = Process.getModuleAddress(processId, 'MyGame.exe');
+const buf = new ArrayBuffer(4);
+
+if (Process.read(processId, baseAddress + 0x1A2B3C, buf)) {
+  const view  = new DataView(buf);
+  const level = view.getInt32(0, true); // true = little-endian
+}
+```
+
+```typescript Reading a f32 (float)
+const baseAddress = Process.getModuleAddress(processId, 'MyGame.exe');
+const buf = new ArrayBuffer(4);
+
+if (Process.read(processId, baseAddress + 0x2C3D4E, buf)) {
+  const view     = new DataView(buf);
+  const position = view.getFloat32(0, true);
+}
+```
+
+```typescript Reading a u8 (flag / byte)
+const baseAddress = Process.getModuleAddress(processId, 'MyGame.exe');
+const buf = new ArrayBuffer(1);
+
+if (Process.read(processId, baseAddress + 0x5F6A7B, buf)) {
+  const view     = new DataView(buf);
+  const isLoaded = view.getUint8(0) !== 0;
+}
+```
+
+</CodeGroup>
+
+The second argument to every `DataView` getter is the `littleEndian` flag. Nearly all modern games run on x86/x86_64 hardware and store values in little-endian byte order, so `true` is almost always correct. Verify with your memory tool if you get unexpected values.
+
+## Common `DataView` Methods
+
+| Method | Byte size | Notes |
+|---|---|---|
+| `getInt8(offset)` | 1 | Signed 8-bit integer |
+| `getUint8(offset)` | 1 | Unsigned 8-bit integer |
+| `getInt16(offset, le)` | 2 | Signed 16-bit integer |
+| `getUint16(offset, le)` | 2 | Unsigned 16-bit integer |
+| `getInt32(offset, le)` | 4 | Signed 32-bit integer |
+| `getUint32(offset, le)` | 4 | Unsigned 32-bit integer |
+| `getFloat32(offset, le)` | 4 | 32-bit IEEE float |
+| `getFloat64(offset, le)` | 8 | 64-bit IEEE float |
+
+## Reading from a DLL Module
+
+If the value you want is in a loaded `.dll` rather than the main executable, pass the DLL name to `getModuleAddress` instead:
+
+```typescript
+const engineBase = Process.getModuleAddress(processId, 'engine.dll');
+const buf = new ArrayBuffer(4);
+
+if (Process.read(processId, engineBase + 0xDEAD00, buf)) {
+  const view  = new DataView(buf);
+  const score = view.getInt32(0, true);
+}
+```
+
+<Tip>
+  Use Cheat Engine, x64dbg, or a similar reverse-engineering tool to discover
+  the memory offsets and module names for the game you're splitting. Look for
+  static (non-pointer) addresses first — values that don't change between game
+  launches — as they are the easiest to use with a fixed offset from the module
+  base.
+</Tip>
+
+## Putting It All Together
+
+Here is a complete snippet showing the attach-and-read pattern for an auto splitter that reads a level ID and splits when it increments:
+
+```typescript
+import 'asr-assemblyscript/runtime';
+import * as Process from 'asr-assemblyscript/process';
+import * as Timer from 'asr-assemblyscript/timer';
+
+let processId: Process.ProcessId = 0;
+let lastLevel: i32 = 0;
+
+export function update(): void {
+  if (processId === 0 || !Process.isOpen(processId)) {
+    processId = Process.attach('MyGame.exe');
+    return;
+  }
+
+  const base = Process.getModuleAddress(processId, 'MyGame.exe');
+  if (base === 0) return; // module not loaded yet
+
+  const buf = new ArrayBuffer(4);
+  if (!Process.read(processId, base + 0x1A2B3C, buf)) return;
+
+  const view  = new DataView(buf);
+  const level = view.getInt32(0, true);
+
+  if (level > lastLevel && Timer.getState() === 1) {
+    Timer.split();
+  }
+  lastLevel = level;
+}
+```

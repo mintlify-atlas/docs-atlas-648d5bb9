@@ -1,0 +1,72 @@
+---
+title: "UserSettings Module — Runner-Configurable Toggles"
+sidebarTitle: "UserSettings"
+description: "Full API reference for asr-assemblyscript/userSettings. Declare boolean settings that runners can toggle in LiveSplit One's settings panel."
+---
+
+The `userSettings` module lets you define configurable options that the runner can toggle directly in LiveSplit One's settings panel — no code changes required. This is the approved mechanism for exposing auto splitter behaviour that varies by runner preference, such as enabling individual-level splits, toggling load-remover logic, or activating debug overlays. Each setting is declared with a unique key, a human-readable description, and a default value; LiveSplit One stores any changes the runner makes and hands them back to your auto splitter on every tick.
+
+```typescript
+import * as UserSettings from 'asr-assemblyscript/userSettings';
+```
+
+---
+
+## addBool
+
+```typescript
+function addBool(key: string, description: string, defaultValue: bool): bool
+```
+
+Registers a boolean toggle in LiveSplit One's settings UI and returns the current value of the setting. If the runner has not yet changed the setting, `defaultValue` is returned. If the runner has toggled it, the user-chosen value is returned instead.
+
+<ParamField path="key" type="string" required>
+  A unique string identifier for this setting. This key is used internally by LiveSplit One to persist the runner's choice. Changing the key in a future version of your auto splitter will reset the setting to its default for existing runners.
+</ParamField>
+
+<ParamField path="description" type="string" required>
+  The human-readable label shown next to the toggle in LiveSplit One's settings panel. Keep this concise and descriptive so runners understand what the setting controls.
+</ParamField>
+
+<ParamField path="defaultValue" type="bool" required>
+  The value to use when the runner has not yet expressed a preference. `true` enables the feature by default; `false` disables it.
+</ParamField>
+
+**Returns:** `bool` — the current effective value of the setting: either the runner's chosen value or `defaultValue` if untouched.
+
+<Note>
+  `addBool` should be called on **every `update()` tick**, not just once on startup. The runtime reads the live runner preference on each call, so omitting the call on a tick means the value may not be current. Calling it every tick is the idiomatic pattern and has negligible overhead.
+</Note>
+
+---
+
+## Usage Example
+
+```typescript
+import 'asr-assemblyscript/runtime';
+import * as Timer from 'asr-assemblyscript/timer';
+import * as UserSettings from 'asr-assemblyscript/userSettings';
+
+export function update(): void {
+  // Declare settings every tick — returns the current runner preference
+  const autosplit  = UserSettings.addBool(
+    "autosplit_enabled",
+    "Enable automatic splitting",
+    true,   // on by default
+  );
+  const skipIntro  = UserSettings.addBool(
+    "skip_intro",
+    "Skip intro cutscene split",
+    false,  // off by default
+  );
+
+  if (!autosplit) {
+    return; // runner has disabled auto splitting entirely
+  }
+
+  // Use skipIntro to conditionally skip a split
+  if (reachedIntroEnd && !skipIntro) {
+    Timer.split();
+  }
+}
+```

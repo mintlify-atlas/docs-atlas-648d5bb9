@@ -1,0 +1,154 @@
+---
+title: "Exposing User Settings to Runners in LiveSplit One"
+sidebarTitle: "User Settings"
+description: "Define boolean toggles that runners can configure in LiveSplit One's settings UI using the UserSettings module in asr-assemblyscript."
+---
+
+Auto splitters are rarely one-size-fits-all. A single game might have multiple categories — Any%, 100%, Individual Levels — each requiring different split points. A runner might want to disable certain splits during practice, or toggle a load-removal strategy on and off. The `asr-assemblyscript/userSettings` module gives you a way to declare named settings that LiveSplit One surfaces in its UI, letting the runner configure them without touching your code. Your auto splitter reads the current value of each setting at runtime and branches its logic accordingly.
+
+## The `addBool` Function
+
+The UserSettings module currently exports a single function:
+
+```typescript
+UserSettings.addBool(key: string, description: string, defaultValue: bool): bool
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `key` | `string` | A unique internal identifier for this setting. Used by LiveSplit One to persist the runner's choice across sessions. |
+| `description` | `string` | The human-readable label displayed next to the toggle in LiveSplit One's settings UI. |
+| `defaultValue` | `bool` | The value to use if the runner has not explicitly changed the setting. |
+
+**Returns:** `bool` — the current value of the setting. This will be `defaultValue` the first time the runner loads your auto splitter, and whatever the runner has configured on subsequent loads.
+
+<Note>
+  Currently only boolean (toggle) settings are supported. String, numeric, and
+  enum settings are not available in this version of the library. If you need to
+  represent a choice between more than two options, consider using multiple
+  boolean flags (e.g. one per category).
+</Note>
+
+## Calling `addBool` Each Tick
+
+`addBool` should be called at the start of every `update()` invocation. The runtime evaluates the user's preference at call time and returns the current value. Reading all your settings at the top of `update()` is the idiomatic pattern:
+
+```typescript
+import 'asr-assemblyscript/runtime';
+import * as Timer from 'asr-assemblyscript/timer';
+import * as UserSettings from 'asr-assemblyscript/userSettings';
+
+export function update(): void {
+  const splitOnBossDefeated = UserSettings.addBool(
+    'split_on_boss',
+    'Split when boss is defeated',
+    true
+  );
+  const ilMode = UserSettings.addBool(
+    'il_mode',
+    'Individual Level mode',
+    false
+  );
+  // use splitOnBossDefeated and ilMode in your logic
+}
+```
+
+In the LiveSplit One settings panel, the runner would see two toggles:
+
+- ✅ **Split when boss is defeated** (on by default)
+- ☐ **Individual Level mode** (off by default)
+
+## A Realistic Example
+
+The following auto splitter exposes three configurable settings and branches its splitting logic based on what the runner has enabled:
+
+```typescript
+import 'asr-assemblyscript/runtime';
+import * as Process from 'asr-assemblyscript/process';
+import * as Timer from 'asr-assemblyscript/timer';
+import * as UserSettings from 'asr-assemblyscript/userSettings';
+import { I32Watcher, BoolWatcher } from 'asr-assemblyscript/watcher';
+
+let processId: Process.ProcessId = 0;
+
+const levelWatcher  = new I32Watcher('MyGame.exe', 0x1A2B3C);
+const bossWatcher   = new BoolWatcher('MyGame.exe', 0x2C3D4E);
+const creditsWatcher = new BoolWatcher('MyGame.exe', 0x3E4F50);
+
+export function update(): void {
+  // Read all settings first — do this every tick
+  const splitOnLevelChange = UserSettings.addBool(
+    'split_on_level',
+    'Split on level transitions',
+    true
+  );
+  const splitOnBoss = UserSettings.addBool(
+    'split_on_boss',
+    'Split when boss is defeated',
+    true
+  );
+  const ilMode = UserSettings.addBool(
+    'il_mode',
+    'Individual Level mode (reset timer between levels)',
+    false
+  );
+
+  if (processId === 0 || !Process.isOpen(processId)) {
+    processId = Process.attach('MyGame.exe');
+    return;
+  }
+
+  levelWatcher.update(processId);
+  bossWatcher.update(processId);
+  creditsWatcher.update(processId);
+
+  const state = Timer.getState();
+
+  // Start on the first level change if not already running
+  if (state === 0 && levelWatcher.current === 1 && levelWatcher.old === 0) {
+    Timer.start();
+  }
+
+  if (state === 1) {
+    // Conditionally split on level transitions
+    if (splitOnLevelChange && levelWatcher.changed && levelWatcher.current > levelWatcher.old) {
+      if (ilMode) {
+        Timer.reset();
+        Timer.start();
+      } else {
+        Timer.split();
+      }
+    }
+
+    // Conditionally split on boss defeat
+    if (splitOnBoss && bossWatcher.old === false && bossWatcher.current === true) {
+      Timer.split();
+    }
+
+    // Always split on credits
+    if (creditsWatcher.old === false && creditsWatcher.current === true) {
+      Timer.split();
+    }
+  }
+}
+```
+
+## Choosing Good Setting Keys
+
+<Tip>
+  Use descriptive, namespaced `key` strings that are unlikely to conflict if you
+  ship multiple versions of your auto splitter or combine logic for several
+  categories in one file. A good convention is `category_action` — for example
+  `anypct_split_boss`, `100pct_split_collectibles`, or `il_mode_enabled`. Keys
+  are stored by LiveSplit One to persist the runner's choices, so changing a key
+  between versions will reset that setting to its default for existing users.
+</Tip>
+
+## Summary
+
+| Concern | Guidance |
+|---|---|
+| When to call `addBool` | At the top of every `update()` call |
+| Key naming | Unique, stable across versions; use a consistent prefix |
+| Default values | Choose safe defaults — enable commonly wanted splits, disable niche or risky ones |
+| Supported types | Boolean only (`bool`) in the current version |

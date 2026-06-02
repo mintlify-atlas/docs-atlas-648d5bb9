@@ -1,0 +1,234 @@
+---
+title: "Tracking Value Changes with Memory Watchers"
+sidebarTitle: "Memory Watchers"
+description: "Use typed Watcher classes to monitor game memory values across ticks, detect changes, and trigger timer events based on transitions in asr-assemblyscript."
+---
+
+Reading raw memory every tick with `Process.read` works, but it leaves you writing the same boilerplate over and over: allocate a buffer, call `read`, parse the bytes, compare against the previous value, and decide whether something changed. What you almost always care about is the *transition* — a level ID going from `1` to `2`, a loading flag flipping from `false` to `true`, a player position crossing a threshold — not just the instantaneous current value. The Watcher classes in `asr-assemblyscript/watcher` wrap this pattern into a tidy, strongly-typed API: declare a watcher at module level, call `update()` on it each tick, and read `.current`, `.old`, and `.changed` to react to transitions without any buffer management.
+
+## How Watchers Work
+
+Every Watcher class stores two values:
+
+- **`current`** — the value read during the most recent call to `update()`.
+- **`old`** — the value that `current` held before the most recent `update()`.
+
+Calling `watcher.update(processId)` performs the following steps atomically within a single tick:
+
+1. Copy `current` into `old`.
+2. Resolve the module base address via `Process.getModuleAddress`.
+3. Read bytes from `moduleBase + address` into an internal buffer.
+4. Parse and store the result as `current`.
+5. Return `true` (and set `.changed` to `true`) if `current !== old`.
+
+The `changed` getter is equivalent to `current !== old` and is provided as a convenience.
+
+## The `changed` Convenience Return Value
+
+`watcher.update(processId)` returns a `bool` — `true` if the value changed on this tick. This is identical to reading `.changed` after the call and lets you write compact conditional expressions:
+
+```typescript
+if (levelWatcher.update(processId)) {
+  // value changed this tick
+}
+
+// Equivalent to:
+levelWatcher.update(processId);
+if (levelWatcher.changed) {
+  // value changed this tick
+}
+```
+
+<Note>
+  The return value of `update()` and the `.changed` getter always agree — both
+  reflect whether `current !== old` after the most recent update. Use whichever
+  style fits your code better; there is no functional difference.
+</Note>
+
+## Available Watcher Classes
+
+All watcher classes are exported from `asr-assemblyscript/watcher`. Import the ones you need:
+
+```typescript
+import {
+  BoolWatcher,
+  I8Watcher, I16Watcher, I32Watcher, I64Watcher, ISizeWatcher,
+  U8Watcher, U16Watcher, U32Watcher, U64Watcher, USizeWatcher,
+  F32Watcher, F64Watcher,
+  StringWatcher,
+} from 'asr-assemblyscript/watcher';
+```
+
+### Numeric and Boolean Watchers
+
+These all share the same constructor signature:
+
+```typescript
+constructor(moduleName: string, address: Process.Address)
+```
+
+| Class | Watched type | Byte size |
+|---|---|---|
+| `BoolWatcher` | `bool` | 1 |
+| `I8Watcher` | `i8` | 1 |
+| `I16Watcher` | `i16` | 2 |
+| `I32Watcher` | `i32` | 4 |
+| `I64Watcher` | `i64` | 8 |
+| `ISizeWatcher` | `isize` | 4 |
+| `U8Watcher` | `u8` | 1 |
+| `U16Watcher` | `u16` | 2 |
+| `U32Watcher` | `u32` | 4 |
+| `U64Watcher` | `u64` | 8 |
+| `USizeWatcher` | `usize` | 4 |
+| `F32Watcher` | `f32` | 4 |
+| `F64Watcher` | `f64` | 8 |
+
+- `moduleName` — the name of the module whose base address the watcher will resolve each tick (e.g. `'MyGame.exe'` or `'engine.dll'`).
+- `address` — the offset from the module base at which the value is stored. The watcher adds this to the resolved base address before reading.
+
+### String Watcher
+
+`StringWatcher` has a slightly different constructor because it needs to know how many bytes to read and which encoding the game uses:
+
+```typescript
+constructor(
+  moduleName: string,
+  address: Process.Address,
+  length: u32,
+  useUTF16: bool = false
+)
+```
+
+- `length` — the maximum byte length of the string buffer to read from memory.
+- `useUTF16` — pass `true` if the game stores strings as UTF-16 (common in .NET/Unity games); defaults to `false` (UTF-8).
+
+`StringWatcher.current` and `StringWatcher.old` are both `string` values. The `changed` getter compares them with `!==`.
+
+## Declaring Watchers at Module Level
+
+Watcher instances must live at module level so they persist across ticks. Initializing them inside `update()` would reset `old` to the initial value every single tick, making change detection useless.
+
+```typescript
+import 'asr-assemblyscript/runtime';
+import * as Process from 'asr-assemblyscript/process';
+import * as Timer from 'asr-assemblyscript/timer';
+import { I32Watcher } from 'asr-assemblyscript/watcher';
+
+let processId: Process.ProcessId = 0;
+const levelWatcher = new I32Watcher('MyGame.exe', 0x1A2B3C);
+
+export function update(): void {
+  if (processId === 0 || !Process.isOpen(processId)) {
+    processId = Process.attach('MyGame.exe');
+    return;
+  }
+
+  levelWatcher.update(processId);
+
+  if (levelWatcher.changed && levelWatcher.current > levelWatcher.old) {
+    Timer.split();
+  }
+}
+```
+
+Here `levelWatcher.current > levelWatcher.old` guards against the watcher triggering on a reset or rewind — you only split when the level number goes *up*.
+
+## Reacting to Specific Transitions
+
+Because you have access to both `current` and `old`, you can match exact value pairs:
+
+```typescript
+import { U8Watcher } from 'asr-assemblyscript/watcher';
+
+const loadingWatcher = new U8Watcher('MyGame.exe', 0xABCDEF);
+
+export function update(): void {
+  // ... attach logic ...
+
+  loadingWatcher.update(processId);
+
+  // Detect the transition from loading (1) to gameplay (0)
+  if (loadingWatcher.old === 1 && loadingWatcher.current === 0) {
+    Timer.resumeGameTime();
+  }
+
+  // Detect the transition from gameplay (0) to loading (1)
+  if (loadingWatcher.old === 0 && loadingWatcher.current === 1) {
+    Timer.pauseGameTime();
+  }
+}
+```
+
+## String Watcher Example
+
+For games that store the current level or area name as a string in memory, use `StringWatcher` to detect room transitions:
+
+```typescript
+import 'asr-assemblyscript/runtime';
+import * as Process from 'asr-assemblyscript/process';
+import * as Timer from 'asr-assemblyscript/timer';
+import { StringWatcher } from 'asr-assemblyscript/watcher';
+
+let processId: Process.ProcessId = 0;
+
+// Read up to 64 bytes as a UTF-8 string
+const levelNameWatcher = new StringWatcher('MyGame.exe', 0x3F0000, 64);
+
+// For a Unity game storing UTF-16 strings:
+// const levelNameWatcher = new StringWatcher('Assembly-CSharp.dll', 0x80200, 128, true);
+
+export function update(): void {
+  if (processId === 0 || !Process.isOpen(processId)) {
+    processId = Process.attach('MyGame.exe');
+    return;
+  }
+
+  levelNameWatcher.update(processId);
+
+  if (levelNameWatcher.changed) {
+    Timer.split();
+  }
+}
+```
+
+## Using Multiple Watchers
+
+You can declare as many watchers as you need. Call `update` on each one in your `update()` function:
+
+```typescript
+import 'asr-assemblyscript/runtime';
+import * as Process from 'asr-assemblyscript/process';
+import * as Timer from 'asr-assemblyscript/timer';
+import { I32Watcher, BoolWatcher, F32Watcher } from 'asr-assemblyscript/watcher';
+
+let processId: Process.ProcessId = 0;
+
+const levelWatcher  = new I32Watcher('MyGame.exe', 0x1A2B3C);
+const loadedWatcher = new BoolWatcher('MyGame.exe', 0x2C3D4E);
+const xPosWatcher   = new F32Watcher('MyGame.exe', 0x3E4F50);
+
+export function update(): void {
+  if (processId === 0 || !Process.isOpen(processId)) {
+    processId = Process.attach('MyGame.exe');
+    return;
+  }
+
+  levelWatcher.update(processId);
+  loadedWatcher.update(processId);
+  xPosWatcher.update(processId);
+
+  // Start when the game finishes its initial loading screen
+  if (loadedWatcher.old === false && loadedWatcher.current === true) {
+    if (Timer.getState() === 0) {
+      Timer.start();
+    }
+  }
+
+  // Split each time the level ID increases
+  if (levelWatcher.changed && levelWatcher.current > levelWatcher.old) {
+    if (Timer.getState() === 1) {
+      Timer.split();
+    }
+  }
+}
+```

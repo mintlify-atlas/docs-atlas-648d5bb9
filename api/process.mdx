@@ -1,0 +1,180 @@
+---
+title: "Process Module — Attach and Read Game Memory"
+sidebarTitle: "Process"
+description: "Full API reference for asr-assemblyscript/process. Attach to game processes by name, read memory regions, and resolve module base addresses."
+---
+
+The `process` module is the foundation of any auto splitter that needs to inspect game memory. It provides everything required to locate a running game process by name, verify that it is still alive, resolve the base address of any loaded module, and read arbitrary memory regions into an `ArrayBuffer` for further decoding. All host communication is handled transparently — the exported functions you call are thin wrappers around the raw WebAssembly imports that manage UTF-8 string encoding for you.
+
+```typescript
+import * as Process from 'asr-assemblyscript/process';
+```
+
+---
+
+## Type Aliases
+
+```typescript
+type ProcessId = u64;
+type Address  = u64;
+```
+
+- **`ProcessId`** — An opaque 64-bit handle returned by `attach()` that identifies a specific process. Pass it to all subsequent process calls. A value of `0` means "no process".
+- **`Address`** — A 64-bit memory address, typically a relative offset from a module's base address. Combine it with the result of `getModuleAddress()` to form an absolute address.
+
+---
+
+## attach
+
+```typescript
+function attach(name: string): ProcessId
+```
+
+Attaches to a running process whose executable name matches `name`. The name is compared against the process list on the host. If no matching process is found, `0` is returned.
+
+<ParamField path="name" type="string" required>
+  The process name to search for, e.g. `"Celeste.exe"` or `"celeste.x86_64"`. The name is encoded as UTF-8 before being passed to the host.
+</ParamField>
+
+**Returns:** `ProcessId` — a non-zero handle if the process was found, or `0` if it was not.
+
+<Warning>
+  `attach()` returns `0` if the process is not found. You **must** check the return value before using the `ProcessId` in any other call — passing `0` to `read()`, `getModuleAddress()`, or similar functions will result in failed reads or undefined behaviour.
+</Warning>
+
+---
+
+## detach
+
+```typescript
+function detach(process: ProcessId): void
+```
+
+Releases the handle to a process. Call this whenever `isOpen()` returns `false`, or when your auto splitter is done with the process, to clean up host-side resources.
+
+<ParamField path="process" type="ProcessId" required>
+  The handle returned by a previous `attach()` call.
+</ParamField>
+
+---
+
+## isOpen
+
+```typescript
+function isOpen(process: ProcessId): bool
+```
+
+Checks whether the process identified by `process` is still running. You should call this every tick and detach (then re-attach) when it returns `false`.
+
+<ParamField path="process" type="ProcessId" required>
+  The handle to check. Passing `0` will always return `false`.
+</ParamField>
+
+**Returns:** `bool` — `true` if the process is still open; `false` if it has exited or the handle is invalid.
+
+---
+
+## read
+
+```typescript
+function read(process: ProcessId, address: Address, buf: ArrayBuffer): bool
+```
+
+Reads memory from the process at the given absolute `address` and writes it into `buf`. Exactly `buf.byteLength` bytes are read. Returns `false` if the read fails (e.g. the address is unmapped or the process has exited).
+
+<ParamField path="process" type="ProcessId" required>
+  The handle of the process to read from.
+</ParamField>
+
+<ParamField path="address" type="Address" required>
+  The absolute memory address to read from. Typically computed as `moduleBase + offset`.
+</ParamField>
+
+<ParamField path="buf" type="ArrayBuffer" required>
+  The destination buffer. The host will write exactly `buf.byteLength` bytes into it.
+</ParamField>
+
+**Returns:** `bool` — `true` if the read succeeded; `false` if it failed.
+
+<Note>
+  `read()` always reads exactly `buf.byteLength` bytes. Size your buffer to match the type you intend to decode: **1 byte** for `i8`/`u8`/`bool`, **2 bytes** for `i16`/`u16`, **4 bytes** for `i32`/`u32`/`f32`, **8 bytes** for `i64`/`u64`/`f64`. Watcher classes (see [Watcher](/api/watcher)) handle this sizing automatically.
+</Note>
+
+---
+
+## getModuleAddress
+
+```typescript
+function getModuleAddress(process: ProcessId, name: string): Address
+```
+
+Returns the base memory address of the named module (shared library or executable image) within the target process. Use this as the base for all relative offsets you read from memory.
+
+<ParamField path="process" type="ProcessId" required>
+  The handle of the process whose module list to query.
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  The module file name, e.g. `"Celeste.exe"` or `"UnityPlayer.dll"`. Encoded as UTF-8 before being passed to the host.
+</ParamField>
+
+**Returns:** `Address` — the base address of the module, or `0` if the module is not loaded.
+
+---
+
+## getModuleSize
+
+```typescript
+function getModuleSize(process: ProcessId, name: string): u64
+```
+
+Returns the size in bytes of the named module's memory region within the target process. Useful for bounds-checking addresses before reading.
+
+<ParamField path="process" type="ProcessId" required>
+  The handle of the process to query.
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  The module file name to look up.
+</ParamField>
+
+**Returns:** `u64` — the size of the module in bytes, or `0` if the module was not found.
+
+---
+
+## Usage Example
+
+A complete attach-and-read pattern with module address resolution:
+
+```typescript
+import * as Process from 'asr-assemblyscript/process';
+
+let processId: Process.ProcessId = 0;
+
+export function update(): void {
+  // Step 1 — (re-)attach if we don't have a valid handle
+  if (processId === 0 || !Process.isOpen(processId)) {
+    if (processId !== 0) {
+      Process.detach(processId);
+    }
+    processId = Process.attach("Celeste.exe");
+    if (processId === 0) {
+      return; // game not running yet
+    }
+  }
+
+  // Step 2 — resolve the module base address
+  const base = Process.getModuleAddress(processId, "Celeste.exe");
+  if (base === 0) return;
+
+  // Step 3 — read a 4-byte integer at a known offset
+  const buf = new ArrayBuffer(4);
+  if (!Process.read(processId, base + 0x1A2B3C, buf)) {
+    return; // read failed
+  }
+
+  // Step 4 — decode the value (little-endian i32)
+  const view = new DataView(buf);
+  const level = view.getInt32(0, true);
+}
+```

@@ -1,0 +1,147 @@
+---
+title: "Watcher Classes — Typed Memory Change Detection"
+sidebarTitle: "Watcher"
+description: "Full API reference for asr-assemblyscript/watcher. Typed Watcher classes track current and previous memory values, simplifying change detection in your update loop."
+---
+
+Watcher classes eliminate the boilerplate of tracking memory value changes across ticks. Rather than manually reading a value, storing a copy from the previous tick, and comparing the two, each watcher manages the `current` / `old` pair for you. Call `update()` once per tick with your process handle, then read `changed`, `current`, or `old` to react to state transitions. Watchers also handle module-relative address resolution internally, so you only supply a module name and a relative offset once — at construction time.
+
+```typescript
+import { I32Watcher, StringWatcher } from 'asr-assemblyscript/watcher';
+```
+
+All watcher classes are named exports. Import only the types you need.
+
+<Tip>
+  Watcher instances **must be declared at module level** (outside your `update()` function) so they persist across ticks. Re-creating a watcher every tick resets `old` to zero on every call, making `changed` meaningless and defeating the entire purpose of the abstraction.
+</Tip>
+
+---
+
+## Shared Watcher Interface
+
+All typed watcher classes expose the same properties and method:
+
+| Member | Type | Description |
+|--------|------|-------------|
+| `current` | `T` | The most recently read value from game memory. |
+| `old` | `T` | The value read during the previous `update()` call. |
+| `changed` | `bool` (getter) | `true` when `current !== old` after the most recent `update()`. |
+| `update(processId)` | `bool` | Reads memory, shifts `current` → `old`, stores the new value in `current`, and returns whether the value changed. |
+
+### `update` method
+
+```typescript
+update(processId: Process.ProcessId): bool
+```
+
+<ParamField path="processId" type="Process.ProcessId" required>
+  The handle returned by `Process.attach()`. The watcher uses this to call `Process.getModuleAddress()` and `Process.read()` internally.
+</ParamField>
+
+**Returns:** `bool` — `true` if the value changed this cycle; `false` otherwise (or if the read failed).
+
+---
+
+## Numeric and Boolean Watcher Classes
+
+All of the following classes share the same constructor signature:
+
+```typescript
+constructor(moduleName: string, address: Process.Address)
+```
+
+<ParamField path="moduleName" type="string" required>
+  The name of the module (executable or DLL) whose base address will be resolved via `Process.getModuleAddress()` each tick, e.g. `"Celeste.exe"`.
+</ParamField>
+
+<ParamField path="address" type="Process.Address" required>
+  The relative offset from the module's base address to the memory location you want to read. The watcher adds this to the resolved module base internally.
+</ParamField>
+
+| Class | AS Type | Buffer size |
+|-------|---------|-------------|
+| `BoolWatcher` | `bool` | 1 byte |
+| `I8Watcher` | `i8` | 1 byte |
+| `I16Watcher` | `i16` | 2 bytes |
+| `I32Watcher` | `i32` | 4 bytes |
+| `I64Watcher` | `i64` | 8 bytes |
+| `ISizeWatcher` | `isize` | 4 bytes |
+| `U8Watcher` | `u8` | 1 byte |
+| `U16Watcher` | `u16` | 2 bytes |
+| `U32Watcher` | `u32` | 4 bytes |
+| `U64Watcher` | `u64` | 8 bytes |
+| `USizeWatcher` | `usize` | 4 bytes |
+| `F32Watcher` | `f32` | 4 bytes |
+| `F64Watcher` | `f64` | 8 bytes |
+
+---
+
+## StringWatcher
+
+`StringWatcher` tracks a fixed-length string in game memory. Because a string requires a length and an encoding to be decoded correctly, its constructor takes two additional parameters compared to the numeric watcher classes.
+
+```typescript
+constructor(moduleName: string, address: Process.Address, length: u32, useUTF16: bool = false)
+```
+
+<ParamField path="moduleName" type="string" required>
+  The module name whose base address is resolved each tick, e.g. `"GameAssembly.dll"`.
+</ParamField>
+
+<ParamField path="address" type="Process.Address" required>
+  The relative offset from the module's base address to the start of the string buffer in memory.
+</ParamField>
+
+<ParamField path="length" type="u32" required>
+  The number of bytes to read from memory. For UTF-8 strings this is the byte length; for UTF-16 strings this is also the byte length (i.e. twice the character count).
+</ParamField>
+
+<ParamField path="useUTF16" type="bool">
+  When `true`, the raw bytes are decoded as UTF-16. When `false` (the default), they are decoded as null-terminated UTF-8. Most game strings are UTF-8; use `true` for games that store strings in UTF-16 (common in Unity/Windows games using `wchar_t` or C# `string` representations).
+</ParamField>
+
+The `current` and `old` properties are both `string`. The `changed` getter and `update()` method work identically to the numeric watchers.
+
+---
+
+## Complete Usage Example
+
+```typescript
+import 'asr-assemblyscript/runtime';
+import * as Process from 'asr-assemblyscript/process';
+import * as Timer   from 'asr-assemblyscript/timer';
+import { I32Watcher, StringWatcher } from 'asr-assemblyscript/watcher';
+
+// Declare watchers at module level so current/old persist across ticks
+const levelId   = new I32Watcher("Celeste.exe", 0x001A2B3C);
+const levelName = new StringWatcher("Celeste.exe", 0x001A2B50, 64); // 64 UTF-8 bytes
+
+let processId: Process.ProcessId = 0;
+
+export function update(): void {
+  // Manage process handle
+  if (processId === 0 || !Process.isOpen(processId)) {
+    if (processId !== 0) Process.detach(processId);
+    processId = Process.attach("Celeste.exe");
+    if (processId === 0) return;
+  }
+
+  // Update watchers — each call resolves module base + reads memory
+  levelId.update(processId);
+  levelName.update(processId);
+
+  // React to changes
+  if (levelId.changed) {
+    // levelId.old holds the previous value, levelId.current the new one
+    Timer.split();
+  }
+
+  if (levelName.changed) {
+    // Can compare strings directly
+    if (levelName.current === "Forsaken City") {
+      Timer.start();
+    }
+  }
+}
+```
