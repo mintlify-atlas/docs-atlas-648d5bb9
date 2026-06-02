@@ -1,7 +1,7 @@
 ---
 title: "asr-assemblyscript: Write Auto Splitters with AssemblyScript"
 sidebarTitle: "Introduction"
-description: "asr-assemblyscript is an AssemblyScript library for building LiveSplit One auto splitters that compile to WebAssembly and control speedrun timers from game memory."
+description: "Build LiveSplit One auto splitters in AssemblyScript: attach to game processes, read memory, and control the speedrun timer from a .wasm binary."
 ---
 
 **asr-assemblyscript** is an [AssemblyScript](https://www.assemblyscript.org/) library that gives speedrun developers a structured, type-safe way to write auto splitters for [LiveSplit One](https://github.com/LiveSplit/LiveSplitOne). Instead of manually authoring raw WebAssembly or wrestling with low-level host imports, you write familiar TypeScript-like code, compile it to a `.wasm` binary, and drop that file into LiveSplit One's layout — where the auto splitting runtime takes over. The library is designed for anyone who wants to automate timer control for a game: from a runner writing their first splitter to a developer maintaining splits for an entire game community.
@@ -12,7 +12,7 @@ An auto splitter is a small WebAssembly module loaded directly by the LiveSplit 
 
 ## Library modules
 
-asr-assemblyscript is organized into four focused modules and one collection of helper classes:
+asr-assemblyscript is organized into five modules:
 
 | Module | Import path | Purpose |
 |---|---|---|

@@ -1,5 +1,5 @@
 ---
-title: "Tracking Value Changes with Memory Watchers"
+title: "Monitoring Game Values Across Ticks with Memory Watchers"
 sidebarTitle: "Memory Watchers"
 description: "Use typed Watcher classes to monitor game memory values across ticks, detect changes, and trigger timer events based on transitions in asr-assemblyscript."
 ---
@@ -105,6 +105,12 @@ constructor(
 `StringWatcher.current` and `StringWatcher.old` are both `string` values. The `changed` getter compares them with `!==`.
 
 ## Declaring Watchers at Module Level
+
+<Tip>
+  Always declare Watcher instances at module level, outside of `update()`. If
+  you initialize a watcher inside `update()`, its `old` value is reset to the
+  initial value on every tick, making change detection completely useless.
+</Tip>
 
 Watcher instances must live at module level so they persist across ticks. Initializing them inside `update()` would reset `old` to the initial value every single tick, making change detection useless.
 

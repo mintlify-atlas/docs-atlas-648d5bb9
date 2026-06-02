@@ -1,7 +1,7 @@
 ---
-title: "Watcher Classes — Typed Memory Change Detection"
+title: "Watcher Classes — Typed Game Memory Change Detection"
 sidebarTitle: "Watcher"
-description: "Full API reference for asr-assemblyscript/watcher. Typed Watcher classes track current and previous memory values, simplifying change detection in your update loop."
+description: "Full API reference for asr-assemblyscript/watcher. Typed Watcher classes track current and previous memory values for change detection across ticks."
 ---
 
 Watcher classes eliminate the boilerplate of tracking memory value changes across ticks. Rather than manually reading a value, storing a copy from the previous tick, and comparing the two, each watcher manages the `current` / `old` pair for you. Call `update()` once per tick with your process handle, then read `changed`, `current`, or `old` to react to state transitions. Watchers also handle module-relative address resolution internally, so you only supply a module name and a relative offset once — at construction time.
